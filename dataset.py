@@ -1,73 +1,131 @@
 import pandas as pd
-import torch 
+import numpy as np
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+
 
 class Dataset:
     def __init__(self, path: str):
         self.path = path
         self.ilinet = pd.read_csv(path, header=1)
 
-    def get_series_data(self):
-        series = self.ilinet["%UNWEIGHTED ILI"]
-        return series
+    def clean_dataframe(self):
+        df = self.ilinet.copy()
 
-    def sliding_window(self, series, hisotry=10, future=4):
+        df.columns = df.columns.str.strip()
+
+        df["REGION TYPE"] = df["REGION TYPE"].astype(str).str.strip()
+        df["REGION"] = df["REGION"].astype(str).str.strip()
+
+        df["YEAR"] = pd.to_numeric(df["YEAR"], errors="coerce")
+        df["WEEK"] = pd.to_numeric(df["WEEK"], errors="coerce")
+        df["%UNWEIGHTED ILI"] = pd.to_numeric(
+            df["%UNWEIGHTED ILI"],
+            errors="coerce"
+        )
+
+        df = df.dropna(
+            subset=["REGION TYPE", "REGION", "YEAR", "WEEK", "%UNWEIGHTED ILI"]
+        )
+
+        return df
+
+    def sliding_window(self, series, history=10, future=4):
         x, y = [], []
-        for i in range(len(series) - hisotry - future):
-            x.append(series[i : i + hisotry].values)
-            y.append(series[i + hisotry : i + hisotry + future].values)
-        return x, y
-    
-    def get_train_and_test_data(self, history=10, future=4, test_size=0.2):
-        series = self.get_series_data()
-        x, y = self.sliding_window(series, history, future)
-        split_index = int(len(x) * (1 - test_size))
-        x_train, y_train = x[:split_index], y[:split_index]
-        x_test, y_test = x[split_index:], y[split_index:]
-        return x_train, y_train, x_test, y_test
-    
+
+        for i in range(len(series) - history - future + 1):
+            x.append(series[i : i + history])
+            y.append(series[i + history : i + history + future])
+
+        return np.array(x), np.array(y)
+
+    def build_split_windows(self, series, history, future, test_size, val_size):
+        n = len(series)
+
+        test_start = int(n * (1 - test_size))
+        val_start = int(test_start * (1 - val_size))
+
+        train_series = series[:val_start]
+        val_series = series[val_start - history : test_start]
+        test_series = series[test_start - history :]
+
+        x_train, y_train = self.sliding_window(train_series, history, future)
+        x_val, y_val = self.sliding_window(val_series, history, future)
+        x_test, y_test = self.sliding_window(test_series, history, future)
+
+        return x_train, y_train, x_val, y_val, x_test, y_test
+
     def get_train_val_test_loader(
         self,
         history=10,
         future=4,
         test_size=0.2,
         val_size=0.1,
-        batch_size=32
+        batch_size=64
     ):
-        x_train, y_train, x_test, y_test = self.get_train_and_test_data(
-            history,
-            future,
-            test_size
-        )
-        # split train -> train + validation
-        val_split = int(len(x_train) * (1 - val_size))
-        x_val = x_train[val_split:]
-        y_val = y_train[val_split:]
+        df = self.clean_dataframe()
 
-        x_train = x_train[:val_split]
-        y_train = y_train[:val_split]
-        train_dataset = torch.utils.data.TensorDataset(
-            torch.tensor(x_train, dtype=torch.float32).unsqueeze(-1),
-            torch.tensor(y_train, dtype=torch.float32)
+        train_x, train_y = [], []
+        val_x, val_y = [], []
+        test_x, test_y = [], []
+
+        for state, g in df.groupby("REGION"):
+            g = g.sort_values(["YEAR", "WEEK"])
+            series = g["%UNWEIGHTED ILI"].values.astype(np.float32)
+
+            if len(series) < history + future:
+                continue
+
+            x_tr, y_tr, x_va, y_va, x_te, y_te = self.build_split_windows(
+                series,
+                history,
+                future,
+                test_size,
+                val_size
+            )
+
+            train_x.append(x_tr)
+            train_y.append(y_tr)
+            val_x.append(x_va)
+            val_y.append(y_va)
+            test_x.append(x_te)
+            test_y.append(y_te)
+
+        x_train = np.concatenate(train_x, axis=0)
+        y_train = np.concatenate(train_y, axis=0)
+        x_val = np.concatenate(val_x, axis=0)
+        y_val = np.concatenate(val_y, axis=0)
+        x_test = np.concatenate(test_x, axis=0)
+        y_test = np.concatenate(test_y, axis=0)
+
+        train_dataset = TensorDataset(
+            torch.from_numpy(x_train).float().unsqueeze(-1),
+            torch.from_numpy(y_train).float().unsqueeze(-1)
         )
-        val_dataset = torch.utils.data.TensorDataset(
-            torch.tensor(x_val, dtype=torch.float32).unsqueeze(-1),
-            torch.tensor(y_val, dtype=torch.float32)
+
+        val_dataset = TensorDataset(
+            torch.from_numpy(x_val).float().unsqueeze(-1),
+            torch.from_numpy(y_val).float().unsqueeze(-1)
         )
-        test_dataset = torch.utils.data.TensorDataset(
-            torch.tensor(x_test, dtype=torch.float32).unsqueeze(-1),
-            torch.tensor(y_test, dtype=torch.float32)
+
+        test_dataset = TensorDataset(
+            torch.from_numpy(x_test).float().unsqueeze(-1),
+            torch.from_numpy(y_test).float().unsqueeze(-1)
         )
-        train_loader = torch.utils.data.DataLoader(
+
+        train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True
         )
-        val_loader = torch.utils.data.DataLoader(
+
+        val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False
         )
-        test_loader = torch.utils.data.DataLoader(
+
+        test_loader = DataLoader(
             test_dataset,
             batch_size=batch_size,
             shuffle=False
@@ -76,10 +134,21 @@ class Dataset:
         print(f"Train samples: {len(train_dataset)}")
         print(f"Validation samples: {len(val_dataset)}")
         print(f"Test samples: {len(test_dataset)}")
+
         return train_loader, val_loader, test_loader
 
-if __name__ == "__main__":
-    dataset = Dataset("./data/national/ILINET.csv")
-    x_train, y_train, x_test, y_test = dataset.get_train_and_test_data(history=10, future=4, test_size=0.2)
-    train_loader, test_loader = dataset.get_train_and_test_loader(history=10, future=4, test_size=0.2, batch_size=32)
 
+if __name__ == "__main__":
+    dataset = Dataset("./data/national/ILINet.csv")
+
+    train_loader, val_loader, test_loader = dataset.get_train_val_test_loader(
+        history=10,
+        future=4,
+        test_size=0.2,
+        val_size=0.1,
+        batch_size=64
+    )
+
+    xb, yb = next(iter(train_loader))
+    print("x batch shape:", xb.shape)  # [B, 10, 1]
+    print("y batch shape:", yb.shape)  # [B, 4, 1]

@@ -235,3 +235,6 @@ lstm_targets.npy
 best_neighbor_transformer.pt
 neighbor_evaluation_comparison.pkl
 neighbor_state_preds.npy
+
+# Python Virtual Environments
+epidemic_env/

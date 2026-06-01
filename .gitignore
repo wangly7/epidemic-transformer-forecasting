@@ -230,3 +230,8 @@ state_evaluation_comparison.pkl
 # LSTM evaluation raw data
 lstm_preds.npy
 lstm_targets.npy
+
+# Neighbor evaluation raw data
+best_neighbor_transformer.pt
+neighbor_evaluation_comparison.pkl
+neighbor_state_preds.npy

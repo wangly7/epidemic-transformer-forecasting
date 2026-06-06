@@ -260,6 +260,36 @@ class MultivariateDataset:
 
         return df
 
+    # def build_multivariate_dataframe(self):
+    #     state_df = self.clean_state_ilinet_dataframe()
+    #     national_df = self.clean_national_ilinet_dataframe()
+    #     lab_df = self.clean_lab_dataframe()
+
+    #     df = state_df.merge(
+    #         national_df,
+    #         on=["YEAR", "WEEK"],
+    #         how="left"
+    #     )
+
+    #     df = df.merge(
+    #         lab_df,
+    #         on=["REGION", "YEAR", "WEEK"],
+    #         how="left"
+    #     )
+
+    #     df = df.sort_values(
+    #         ["REGION", "YEAR", "WEEK"]
+    #     ).reset_index(drop=True)
+
+    #     df = df.dropna(
+    #         subset=[
+    #             "%UNWEIGHTED ILI",
+    #             "national_ili"
+    #         ]
+    #     )
+
+    #     return df
+
     def build_multivariate_dataframe(self):
         state_df = self.clean_state_ilinet_dataframe()
         national_df = self.clean_national_ilinet_dataframe()
@@ -281,14 +311,37 @@ class MultivariateDataset:
             ["REGION", "YEAR", "WEEK"]
         ).reset_index(drop=True)
 
+        # Keep rows as much as possible
+        # Target state ILI must exist, otherwise y is invalid
         df = df.dropna(
             subset=[
-                "%UNWEIGHTED ILI",
-                "national_ili"
+                "%UNWEIGHTED ILI"
             ]
         )
 
+        # Forward-fill exogenous features within each region
+        fill_cols = [
+            "national_ili",
+            "PERCENT POSITIVE"
+        ]
+
+        df[fill_cols] = (
+            df
+            .groupby("REGION")[fill_cols]
+            .ffill()
+        )
+
+        # For very first rows where no previous value exists:
+        # use region-level median first
+        for col in fill_cols:
+            region_median = df.groupby("REGION")[col].transform("median")
+            global_median = df[col].median()
+
+            df[col] = df[col].fillna(region_median)
+            df[col] = df[col].fillna(global_median)
+
         return df
+
 
     def sliding_window_multivariate(
         self,
@@ -303,8 +356,8 @@ class MultivariateDataset:
             x_window = features[i : i + history]
             y_window = target[i + history : i + history + future]
 
-            if np.isnan(x_window).any() or np.isnan(y_window).any():
-                continue
+            # if np.isnan(x_window).any() or np.isnan(y_window).any():
+            #     continue
 
             x.append(x_window)
             y.append(y_window)

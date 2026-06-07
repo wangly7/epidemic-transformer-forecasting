@@ -46,7 +46,7 @@ jupyter notebook
 Open and run:
 
 ```text
-transformer.ipynb
+transformer-influenza-predicting.ipynb
 ```
 
 Run the notebook cells from top to bottom to reproduce the main experiments.
